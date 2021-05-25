@@ -11,7 +11,7 @@ func Test_caption(t *testing.T) {
 	f := NewFrame()
 	for _, i := range x {
 		f.Decode(i, 0)
+		fmt.Printf("HERE %s\n", f.back.String())
 	}
 
-	fmt.Printf("HERE %s\n", f)
 }

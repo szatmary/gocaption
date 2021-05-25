@@ -1,5 +1,6 @@
 package caption
 
+// 0, 0 is bottom left
 const (
 	Rows = 15
 	Cols = 32
@@ -7,34 +8,62 @@ const (
 
 type frameBufferChar struct {
 	underline bool
-	style     int
+	style     byte
 	char      string // TODO make this a rune
 }
 
+type frameBuffer struct {
+	data [Rows * Cols]frameBufferChar
+}
+
+func (b *frameBuffer) clear() {
+	b.data = [Rows * Cols]frameBufferChar{}
+}
+
+func (b *frameBuffer) getChar(r, c uint) *frameBufferChar {
+	if r >= Rows || c >= Cols {
+		return nil
+	}
+	return &b.data[r*Rows+c]
+}
+
+func (b *frameBuffer) carrageReturn(n uint) {
+
+}
+
+func (b *frameBuffer) setChar(r, c uint, char frameBufferChar) bool {
+	val := b.getChar(r, c)
+	if val != nil && *val != char {
+		*val = char
+		return true
+	}
+	return false
+}
+
+func (b *frameBuffer) String() string {
+	var s string
+	// TODO add formating, new lines, spaces, etx
+	for _, col := range b.data {
+		s += col.char
+	}
+	return s
+}
+
 type Frame struct {
-	status    byte
 	timestamp float64
+
 	// State
+	// Does ever channel have its own state? If so, move this to the frameBuffer struct
 	underline bool
-	style     int
-	rollup    int
-	row, col  int
+	style     byte
+	rollup    uint
+	row, col  uint
 	ccData    uint16
 
 	// TODO add CC1-4 buffers
-	front  [Rows][Cols]frameBufferChar
-	back   [Rows][Cols]frameBufferChar
-	active *[Rows][Cols]frameBufferChar
-}
-
-func (f *Frame) String() string {
-	var s string
-	for _, row := range f.back {
-		for _, col := range row {
-			s += col.char
-		}
-	}
-	return s
+	front  frameBuffer
+	back   frameBuffer
+	active *frameBuffer
 }
 
 var parityTable = func() [128]byte {
@@ -82,17 +111,15 @@ func (f *Frame) backspace() {
 	if f.col > 0 {
 		f.col--
 	}
-	f.active[f.row][f.col] = frameBufferChar{}
+	f.active.setChar(f.row, f.col, frameBufferChar{})
 }
 
 func (f *Frame) parseControl(ccData uint16) error {
 	var cmd, cc uint16
-	if 0 != 0x0200&ccData {
-		// not tabs
+	if 0 == 0x0200&ccData {
 		cc = (ccData&0x0800)>>10 | (ccData&0x0100)>>8
 		cmd = 0x167F & ccData
 	} else {
-		// tabs
 		cc = (ccData & 0x0800) >> 11
 		cmd = 0x177F & ccData
 	}
@@ -106,8 +133,8 @@ func (f *Frame) parseControl(ccData uint16) error {
 		return nil //LIBCAPTION_OK;
 
 	case eia608_control_erase_display_memory:
-		f.front = [Rows][Cols]frameBufferChar{} // set defaults
-		return nil                              //LIBCAPTION_READY;
+		f.front.clear()
+		return nil //LIBCAPTION_READY;
 
 		// ROLL-UP
 	case eia608_control_roll_up_2:
@@ -134,7 +161,7 @@ func (f *Frame) parseControl(ccData uint16) error {
 		return nil //LIBCAPTION_OK
 	case eia608_control_delete_to_end_of_row:
 		for i := f.col; i < Cols; i++ {
-			f.active[f.row][i] = frameBufferChar{}
+			f.active.setChar(f.row, i, frameBufferChar{})
 		}
 		return nil //LIBCAPTION_OK
 
@@ -145,12 +172,13 @@ func (f *Frame) parseControl(ccData uint16) error {
 		return nil //LIBCAPTION_OK;
 
 	case eia608_control_erase_non_displayed_memory:
-		f.back = [Rows][Cols]frameBufferChar{}
+		f.back.clear()
 		return nil //LIBCAPTION_OK;
 
 	case eia608_control_end_of_caption:
-		f.front, f.back = f.back, [Rows][Cols]frameBufferChar{}
-		f.col, f.row = 0, Rows-1
+		f.front, f.back = f.back, f.front
+		f.back.clear()
+		f.col, f.row = 0, 0
 		f.active = &f.back
 		return nil //LIBCAPTION_READY
 
@@ -189,16 +217,17 @@ const (
 
 func isPreamble(ccData uint16) bool { return 0x1040 == (0x7040 & ccData) }
 func (f *Frame) parsePreamble(ccData uint16) error {
-	rowMap := []int{10, -1, 0, 1, 2, 3, 11, 12, 13, 14, 4, 5, 6, 7, 8, 9}
+	// rowMap := []uint{10, Rows, 0, 1, 2, 3, 11, 12, 13, 14, 4, 5, 6, 7, 8, 9}
+	rowMap := []uint{4, Rows, 14, 13, 12, 11, 3, 2, 2, 0, 10, 9, 8, 7, 6, 5}
 	f.row = rowMap[((0x0700&ccData)>>7)|((0x0020&ccData)>>5)]
 	// cc := !!(0x0800 & ccData) // TODO handle channels!
 	f.underline = 0x0001&ccData == 1
 
 	f.col, f.style = 0, eia608_style_white
 	if 0x0010&ccData == 0 {
-		f.style = int((0x000E & ccData) >> 1)
+		f.style = byte((0x000E & ccData) >> 1)
 	} else {
-		f.col = int(4 * ((0x000E & ccData) >> 1))
+		f.col = uint(4 * ((0x000E & ccData) >> 1))
 	}
 	return nil
 }
@@ -207,26 +236,25 @@ func isMidRowChange(ccData uint16) bool { return 0x1120 == (0x7770 & ccData) }
 func (f *Frame) parseMidRowChange(ccData uint16) error {
 	// cc := !!(0x0800 & ccData); TODO!
 	if 0x1120 == (0x7770 & ccData) {
-		f.style = int((0x000E & ccData) >> 1)
+		f.style = byte((0x000E & ccData) >> 1)
 		f.underline = 0x0001&ccData == 1
 	}
 	return nil
 }
 
-func (f *Frame) writeChar(i uint16) error {
+// returns true if the buffer changed
+func (f *Frame) writeChar(i uint16) bool {
 	// TODO check charMap range!
 	char := charMap[i]
-	if f.col >= Cols {
-		return nil
-	}
-	// TODO check cow/col range!
-	f.active[f.row][f.col] = frameBufferChar{
+	r := f.active.setChar(f.row, f.col, frameBufferChar{
 		char:      string(char),
 		underline: f.underline,
 		style:     f.style,
+	})
+	if f.col < Cols {
+		f.col++
 	}
-	f.col++
-	return nil
+	return r
 }
 
 func isBasicNA(ccData uint16) bool   { return 0x0000 != (0x6000 & ccData) }
@@ -235,13 +263,11 @@ func isWesternEu(ccData uint16) bool { return 0x1220 == (0x7660 & ccData) }
 func (f *Frame) parseText(ccData uint16) error {
 	// Handle Basic NA BEFORE we strip the channel bit
 	if isBasicNA(ccData) {
-		if err := f.writeChar((ccData >> 8) - 0x20); err != nil {
-			return err
-		}
+		f.writeChar((ccData >> 8) - 0x20)
 		ccData &= 0x00FF
 		if 0x0020 <= ccData && 0x0080 > ccData {
 			// we got first char, yes. But what about second char?
-			return f.writeChar(ccData - 0x20)
+			f.writeChar(ccData - 0x20)
 		}
 		return nil
 	}
@@ -251,26 +277,31 @@ func (f *Frame) parseText(ccData uint16) error {
 	ccData = ccData & 0xF7FF
 	if isSpecialNA(ccData) {
 		// Special North American character
-		return f.writeChar(ccData - 0x1130 + 0x60)
+		f.writeChar(ccData - 0x1130 + 0x60)
+		return nil
 	}
 
 	if 0x1220 <= ccData && 0x1240 > ccData {
 		// Extended Western European character set, Spanish/Miscellaneous/French
 		f.backspace()
-		return f.writeChar(ccData - 0x1220 + 0x70)
+		f.writeChar(ccData - 0x1220 + 0x70)
+		return nil
+
 	}
 
 	if 0x1320 <= ccData && 0x1340 > ccData {
 		// Extended Western European character set, Portuguese/German/Danish
 		f.backspace()
-		return f.writeChar(ccData - 0x1320 + 0x90)
+		f.writeChar(ccData - 0x1320 + 0x90)
+		return nil
 	}
 
 	return nil //
 }
 
 func NewFrame() *Frame {
-	return &Frame{row: Rows - 1}
+	// TODO we shoudl reverse the rows, so 0 is at the bottom
+	return &Frame{}
 }
 
 func (f *Frame) Decode(ccData uint16, timestamp float64) error {
