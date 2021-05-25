@@ -217,8 +217,7 @@ const (
 
 func isPreamble(ccData uint16) bool { return 0x1040 == (0x7040 & ccData) }
 func (f *Frame) parsePreamble(ccData uint16) error {
-	// rowMap := []uint{10, Rows, 0, 1, 2, 3, 11, 12, 13, 14, 4, 5, 6, 7, 8, 9}
-	rowMap := []uint{4, Rows, 14, 13, 12, 11, 3, 2, 2, 0, 10, 9, 8, 7, 6, 5}
+	rowMap := []uint{4, Rows, 14, 13, 12, 11, 3, 2, 1, 0, 10, 9, 8, 7, 6, 5}
 	f.row = rowMap[((0x0700&ccData)>>7)|((0x0020&ccData)>>5)]
 	// cc := !!(0x0800 & ccData) // TODO handle channels!
 	f.underline = 0x0001&ccData == 1
