@@ -55,8 +55,6 @@ func ParityWord(ccData uint16) uint16 {
 	return uint16(a)<<8 | uint16(b)
 }
 
-func isPadding(ccData uint16) bool { return 0x8080 == ccData }
-
 const (
 	eia608_control_resume_caption_loading     = 0x1420
 	eia608_control_backspace                  = 0x1421
@@ -235,8 +233,6 @@ func isBasicNA(ccData uint16) bool   { return 0x0000 != (0x6000 & ccData) }
 func isSpecialNA(ccData uint16) bool { return 0x1130 == (0x7770 & ccData) }
 func isWesternEu(ccData uint16) bool { return 0x1220 == (0x7660 & ccData) }
 func (f *Frame) parseText(ccData uint16) error {
-	ccData &= 0x7F7F // strip off parity bits
-
 	// Handle Basic NA BEFORE we strip the channel bit
 	if isBasicNA(ccData) {
 		if err := f.writeChar((ccData >> 8) - 0x20); err != nil {
@@ -283,8 +279,9 @@ func (f *Frame) Decode(ccData uint16, timestamp float64) error {
 		return nil
 	}
 
-	if isPadding(ccData) {
-		return nil
+	ccData &= 0x7F7F // strip off parity bits
+	if ccData == 0 {
+		return nil // padding
 	}
 
 	// TODO
