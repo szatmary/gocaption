@@ -74,7 +74,6 @@ const (
 	eia608_control_erase_non_displayed_memory = 0x142E
 	eia608_control_end_of_caption             = 0x142F
 
-	eia608_tab_offset_0 = 0x1720 // not rally a thing
 	eia608_tab_offset_1 = 0x1721
 	eia608_tab_offset_2 = 0x1722
 	eia608_tab_offset_3 = 0x1723
@@ -159,13 +158,13 @@ func (f *Frame) parseControl(ccData uint16) error {
 
 	// cursor positioning
 	case eia608_tab_offset_1:
-		f.col = 1
+		f.col += 1
 		return nil //LIBCAPTION_OK;
 	case eia608_tab_offset_2:
-		f.col = 2
+		f.col += 2
 		return nil //LIBCAPTION_OK;
 	case eia608_tab_offset_3:
-		f.col = 3
+		f.col += 3
 		return nil //LIBCAPTION_OK;
 
 	// Unhandled
