@@ -9,7 +9,7 @@ const (
 type frameBufferChar struct {
 	underline bool
 	style     byte
-	char      string // TODO make this a rune
+	char      rune
 }
 
 type frameBuffer struct {
@@ -28,7 +28,11 @@ func (b *frameBuffer) getChar(r, c uint) *frameBufferChar {
 }
 
 func (b *frameBuffer) carrageReturn(n uint) {
-
+	// s := (Rows - n) * Cols
+	// e := (Rows - 1) * Cols
+	// d := (Rows - n - 1) * Cols
+	// b.clear()
+	// copy(b.data[d:], b.data[s:e])
 }
 
 func (b *frameBuffer) setChar(r, c uint, char frameBufferChar) bool {
@@ -43,8 +47,15 @@ func (b *frameBuffer) setChar(r, c uint, char frameBufferChar) bool {
 func (b *frameBuffer) String() string {
 	var s string
 	// TODO add formating, new lines, spaces, etx
-	for _, col := range b.data {
-		s += col.char
+	for i, c := range b.data {
+		if c.char == 0 {
+			continue
+		}
+		if 0 == i%Cols && len(s) > 0 {
+			s += "\n"
+		}
+
+		s += string(c.char)
 	}
 	return s
 }
@@ -53,7 +64,7 @@ type Frame struct {
 	timestamp float64
 
 	// State
-	// Does ever channel have its own state? If so, move this to the frameBuffer struct
+	// Does every channel have its own state? If so, move this to the frameBuffer struct
 	underline bool
 	style     byte
 	rollup    uint
@@ -73,6 +84,30 @@ var parityTable = func() [128]byte {
 		table[i] = byte((i & 0x7F)) | (0x80 ^ bx(i, 1) ^ bx(i, 2) ^ bx(i, 3) ^ bx(i, 4) ^ bx(i, 5) ^ bx(i, 6) ^ bx(i, 7))
 	}
 	return table
+}()
+
+var charMap = func() []rune {
+	return []rune{
+		// Basic NA
+		' ', '!', '"', '#', '$', '%', '&', '’', '(', ')', 'á', '+', ',', '-', '.', '/', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', ';', '<', '=', '>', '?', '@',
+		'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '[', 'é', ']', 'í', 'ó', 'ú',
+		'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'ç', '÷', 'Ñ', 'ñ', '█',
+		// Special NA
+		'®', '°', '½', '¿', '™', '¢', '£', '♪', 'à', ' ', 'è', 'â', 'ê', 'î', 'ô', 'û',
+		// Extended Spanish/Miscellaneous
+		'Á', 'É', 'Ó', 'Ú', 'Ü', 'ü', '‘', '¡', '*', '\'', '—', '©', '℠', '•', '“', '”',
+		// Extended French
+		'À', 'Â', 'Ç', 'È', 'Ê', 'Ë', 'ë', 'Î', 'Ï', 'ï', 'Ô', 'Ù', 'ù', 'Û', '«', '»',
+		// Portuguese
+		'Ã', 'ã', 'Í', 'Ì', 'ì', 'Ò', 'ò', 'Õ', 'õ', '{', '}', '\\', '^', '_', '|', '~',
+		// German/Danish
+		'Ä', 'ä', 'Ö', 'ö', 'ß', '¥', '¤', '¦', 'Å', 'å', 'Ø', 'ø', '┌', '┐', '└', '┘',
+	}
+}()
+
+var rowMap = func() []uint {
+	// This is accually reverse order. This way we can put row 0 at the bottom.
+	return []uint{4, Rows, 14, 13, 12, 11, 3, 2, 1, 0, 10, 9, 8, 7, 6, 5}
 }()
 
 func ParityByte(ccData byte) byte {
@@ -138,17 +173,17 @@ func (f *Frame) parseControl(ccData uint16) error {
 
 		// ROLL-UP
 	case eia608_control_roll_up_2:
-		f.rollup = 1
-		f.active = &f.front
-		return nil //LIBCAPTION_OK
-
-	case eia608_control_roll_up_3:
 		f.rollup = 2
 		f.active = &f.front
 		return nil //LIBCAPTION_OK
 
-	case eia608_control_roll_up_4:
+	case eia608_control_roll_up_3:
 		f.rollup = 3
+		f.active = &f.front
+		return nil //LIBCAPTION_OK
+
+	case eia608_control_roll_up_4:
+		f.rollup = 4
 		f.active = &f.front
 		return nil //LIBCAPTION_OK
 
@@ -217,7 +252,6 @@ const (
 
 func isPreamble(ccData uint16) bool { return 0x1040 == (0x7040 & ccData) }
 func (f *Frame) parsePreamble(ccData uint16) error {
-	rowMap := []uint{4, Rows, 14, 13, 12, 11, 3, 2, 1, 0, 10, 9, 8, 7, 6, 5}
 	f.row = rowMap[((0x0700&ccData)>>7)|((0x0020&ccData)>>5)]
 	// cc := !!(0x0800 & ccData) // TODO handle channels!
 	f.underline = 0x0001&ccData == 1
@@ -243,10 +277,12 @@ func (f *Frame) parseMidRowChange(ccData uint16) error {
 
 // returns true if the buffer changed
 func (f *Frame) writeChar(i uint16) bool {
-	// TODO check charMap range!
-	char := charMap[i]
+	char := '�'
+	if int(i) < len(charMap) {
+		char = charMap[i]
+	}
 	r := f.active.setChar(f.row, f.col, frameBufferChar{
-		char:      string(char),
+		char:      char,
 		underline: f.underline,
 		style:     f.style,
 	})
@@ -296,11 +332,6 @@ func (f *Frame) parseText(ccData uint16) error {
 	}
 
 	return nil //
-}
-
-func NewFrame() *Frame {
-	// TODO we shoudl reverse the rows, so 0 is at the bottom
-	return &Frame{}
 }
 
 func (f *Frame) Decode(ccData uint16, timestamp float64) error {
